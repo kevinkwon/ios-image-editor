@@ -5,7 +5,7 @@ static const CGFloat kPreviewImageSize = 120;
 static const CGFloat kDefaultCropWidth = 320;
 static const CGFloat kDefaultCropHeight = 320;
 static const CGFloat kBoundingBoxInset = 15;
-static const NSTimeInterval kAnimationIntervalReset = 0.25;
+static const NSTimeInterval kAnimationIntervalReset = 0.37;
 static const NSTimeInterval kAnimationIntervalTransform = 0.2;
 
 @interface HFImageEditorViewController ()
@@ -63,13 +63,13 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
         _rotationRecognizer = [[UIRotationGestureRecognizer alloc] initWithTarget:self action:@selector(handleRotation:)];
         _pinchRecognizer = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(handlePinch:)];
         _tapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTap:)];
+        _snapToBoundsEnabled = NO;
     }
     return self;
 }
 
 - (void) dealloc
 {
-
     [_imageView release];
     [_frameView release];
     [_doneCallback release];
@@ -178,9 +178,92 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
     return self.tapToResetEnabled;
 }
 
+#pragma mark - Private Methods
+- (void)doCenter:(BOOL)animated
+{
+    void (^doCenter)(void) = ^{
+        CGAffineTransform transform =  CGAffineTransformMakeTranslation(0, 0);
+        transform = CGAffineTransformScale(transform, self.imageView.transform.a, self.imageView.transform.d);
+        self.imageView.transform = transform;
+    };
+    if(animated) {
+        self.view.userInteractionEnabled = NO;
+        // animation 속도 조절
+        [UIView animateWithDuration:kAnimationIntervalReset delay:0 options:UIViewAnimationOptionCurveEaseOut animations:doCenter completion:^(BOOL finished) {
+            self.view.userInteractionEnabled = YES;
+        }];
+    } else {
+        doCenter();
+    }
+}
+
+// 경계로 붙이기
+-(void)snapToBounds:(BOOL)animated
+{
+    CGFloat deltaX = 0.0f;
+    CGFloat deltaY = 0.0f;
+
+    NSLog(@"가로, 정방 이미지");
+    // 이미지가 왼쪽인지 오른쪽인지 판단
+    if (CGRectGetMinX(self.imageView.frame) < CGRectGetMinX(self.cropRect) && CGRectGetMaxX(self.imageView.frame) > CGRectGetMaxX(self.cropRect)) {
+        NSLog(@"이미지가 크롭박스 넓이를 넘어선다");
+        deltaX = 0;
+        if (CGRectGetHeight(self.imageView.frame) < CGRectGetHeight(self.cropRect)) {
+            NSLog(@"이미지의 세로사이즈가 크롭보다 작다, 가운데로 정렬해준다.");
+            deltaY = CGRectGetMidY(self.cropRect) - CGRectGetMidY(self.imageView.frame);
+        }
+        else {
+            if (CGRectGetMinY(self.imageView.frame) < CGRectGetMinY(self.cropRect)) {
+                NSLog(@"아래라인으로 정렬해준다.");
+                deltaY = CGRectGetMaxY(self.cropRect) - CGRectGetMaxY(self.imageView.frame);
+            }
+            else {
+                NSLog(@"윗라인으로 정렬해준다.");
+                // 아래쪽
+                deltaY = CGRectGetMinY(self.cropRect) - CGRectGetMinY(self.imageView.frame);
+            }
+        }
+    }
+    else {
+        if (CGRectGetMinX(self.imageView.frame) < 0) {
+            NSLog(@"이미지가 왼쪽으로 쏠려있다.");
+            deltaX = CGRectGetMaxX(self.cropRect) - CGRectGetMaxX(self.imageView.frame);
+        }
+        else {
+            NSLog(@"이미지가 오른쪽으로 쏠려있다.");
+            deltaX = CGRectGetMinX(self.cropRect) - CGRectGetMinX(self.imageView.frame);
+        }
+        if (CGRectGetHeight(self.imageView.frame) < CGRectGetHeight(self.cropRect)) {
+            NSLog(@"이미지의 세로사이즈가 크롭보다 작다, 가운데로 정렬해준다.");
+            deltaY = -self.imageView.transform.ty;
+        }
+        else {
+            if (CGRectGetMaxY(self.imageView.frame) < CGRectGetMaxY(self.cropRect)) {
+                NSLog(@"아래라인으로 정렬해준다.");
+                deltaY = CGRectGetMaxY(self.cropRect) - CGRectGetMaxY(self.imageView.frame);
+            }
+            else if (CGRectGetMinY(self.imageView.frame) > CGRectGetMinY(self.cropRect)){
+                NSLog(@"윗라인으로 정렬해준다.");
+                // 아래쪽
+                deltaY = CGRectGetMinY(self.cropRect) - CGRectGetMinY(self.imageView.frame);
+            }
+            else
+                deltaY = 0;
+        }
+    }
+
+    [UIView animateWithDuration:kAnimationIntervalReset delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        CGAffineTransform transform =  CGAffineTransformTranslate(self.imageView.transform, deltaX/self.scale, deltaY/self.scale);
+        self.imageView.transform = transform;
+    } completion:^(BOOL finished) {
+        self.view.userInteractionEnabled = YES;
+    }];
+}
+
 #pragma mark Public methods
 -(void)reset:(BOOL)animated
 {
+    NSLog(@"do Reset");
     CGFloat aspect = self.sourceImage.size.height/self.sourceImage.size.width;
     CGFloat w = CGRectGetWidth(self.cropRect);
     CGFloat h = aspect * w;
@@ -188,12 +271,15 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
     
     void (^doReset)(void) = ^{
         self.imageView.transform = CGAffineTransformIdentity;
-        self.imageView.frame = CGRectMake(CGRectGetMidX(self.frameView.frame) - w/2, CGRectGetMidY(self.frameView.frame) - h/2,w,h);
+        self.imageView.frame = CGRectMake(CGRectGetMidX(self.cropRect) - w/2, CGRectGetMidY(self.cropRect) - h/2,w,h);
     };
     if(animated) {
         self.view.userInteractionEnabled = NO;
-        [UIView animateWithDuration:kAnimationIntervalReset animations:doReset completion:^(BOOL finished) {
+        // animation 속도 조절
+        [UIView animateWithDuration:kAnimationIntervalReset delay:0 options:UIViewAnimationOptionCurveEaseOut animations:doReset completion:^(BOOL finished) {
             self.view.userInteractionEnabled = YES;
+            NSLog(@"after imgageView frame:%@", NSStringFromCGRect(self.imageView.frame));
+            NSLog(@"리셋한 이미지뷰 중심:%f, %f", CGRectGetMidX(self.imageView.frame), CGRectGetMidY(self.imageView.frame));
         }];
     } else {
         doReset();
@@ -243,6 +329,7 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
+    [[UIApplication sharedApplication] setStatusBarStyle:UIStatusBarStyleBlackTranslucent animated:YES];
     [self updateCropRect];
     [self reset:NO];
     self.imageView.image = self.previewImage;
@@ -265,6 +352,10 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
             });
         });
     }
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [[UIApplication sharedApplication] setStatusBarStyle:UIStatusBarStyleDefault animated:YES];
 }
 
 #pragma mark Actions
@@ -334,6 +425,7 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
 }
 
 -(void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event {
+//    NSLog(@"핸들터치 tx, ty : %f, %f", self.imageView.transform.tx, self.imageView.transform.ty);
     [self handleTouches:[event allTouches]];
 }
 
@@ -362,24 +454,52 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
                 CGFloat scale = self.scale;
                 if(self.minimumScale != 0 && self.scale < self.minimumScale) {
                     scale = self.minimumScale;
-                } else if(self.maximumScale != 0 && self.scale > self.maximumScale) {
+                } else
+                if(self.maximumScale != 0 && self.scale > self.maximumScale) {
                     scale = self.maximumScale;
                 }
                 if(scale != self.scale) {
+                    NSLog(@"스케일이 제한에 따른 처리, 비교스케일:%f, 현재스케일:%f", scale, self.scale);
                     CGFloat deltaX = self.scaleCenter.x-self.imageView.bounds.size.width/2.0;
                     CGFloat deltaY = self.scaleCenter.y-self.imageView.bounds.size.height/2.0;
-                    
-                    CGAffineTransform transform =  CGAffineTransformTranslate(self.imageView.transform, deltaX, deltaY);
-                    transform = CGAffineTransformScale(transform, scale/self.scale , scale/self.scale);
-                    transform = CGAffineTransformTranslate(transform, -deltaX, -deltaY);
+
+                    CGAffineTransform transform;
+                    if (self.scale < scale) {
+                        transform =  CGAffineTransformMakeTranslation(0, 0);
+                    }
+                    else {
+                        transform =  CGAffineTransformTranslate(self.imageView.transform, deltaX, deltaY);
+                        transform = CGAffineTransformScale(transform, scale/self.scale , scale/self.scale);
+                        transform = CGAffineTransformTranslate(transform, -deltaX, -deltaY);
+                    }
+
                     self.view.userInteractionEnabled = NO;
                     [UIView animateWithDuration:kAnimationIntervalTransform delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-                        self.imageView.transform = transform;            
+                        self.imageView.transform = transform;
                     } completion:^(BOOL finished) {
                         self.view.userInteractionEnabled = YES;
                         self.scale = scale;
                     }];
-                    
+                    break;
+                }
+
+                if (self.snapToBoundsEnabled) {
+                    // 이미지가 프레임을 벗어났을때
+                    if (CGRectContainsRect(self.imageView.frame, self.cropRect)) {
+                        NSLog(@"이미지가 크롭뷰를 덮으면 아무것도 하지 않음");
+                    }
+                    else {
+                        NSLog(@"이미지뷰가 크롭뷰를 덥고 있지 않음");
+                        if (CGRectContainsRect(self.cropRect, self.imageView.frame)) {
+                            NSLog(@"이미지가 크롭뷰안에 있음 (내부에 있고, 이미지뷰가 충분히 작음)");
+                            NSLog(@"이 경우 이미지를 가운데로 리셋 시켜버림");
+                            [self reset:YES];
+                        }
+                        else {
+                            NSLog(@"이미지가 크롭뷰를 벗어남");
+                            [self snapToBounds:YES];
+                        }
+                    }
                 }
             }
         } break;
@@ -392,11 +512,11 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
 
 - (IBAction)handlePan:(UIPanGestureRecognizer*)recognizer
 {
-        if([self handleGestureState:recognizer.state]) {
+    if([self handleGestureState:recognizer.state]) {
         CGPoint translation = [recognizer translationInView:self.imageView];
-        CGAffineTransform transform = CGAffineTransformTranslate( self.imageView.transform, translation.x, translation.y);
+        CGAffineTransform transform = CGAffineTransformTranslate(self.imageView.transform, translation.x, translation.y);
         self.imageView.transform = transform;
-
+        NSLog(@"now transform:%@", NSStringFromCGAffineTransform(self.imageView.transform));
         [recognizer setTranslation:CGPointMake(0, 0) inView:self.frameView];
     }
 
@@ -426,11 +546,11 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
     if([self handleGestureState:recognizer.state]) {
         if(recognizer.state == UIGestureRecognizerStateBegan){
             self.scaleCenter = self.touchCenter;
-        } 
+        }
         CGFloat deltaX = self.scaleCenter.x-self.imageView.bounds.size.width/2.0;
         CGFloat deltaY = self.scaleCenter.y-self.imageView.bounds.size.height/2.0;
 
-        CGAffineTransform transform =  CGAffineTransformTranslate(self.imageView.transform, deltaX, deltaY);
+        CGAffineTransform transform =  CGAffineTransformTranslate(self.imageView.transform,deltaX,deltaY);
         transform = CGAffineTransformScale(transform, recognizer.scale, recognizer.scale);
         transform = CGAffineTransformTranslate(transform, -deltaX, -deltaY);
         self.scale *= recognizer.scale;
@@ -519,13 +639,39 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
                imageViewSize:(CGSize)imageViewSize
 {
     CGImageRef source = [self newScaledImage:sourceImage
-                         withOrientation:sourceOrientation
-                                  toSize:sourceSize
-                             withQuality:kCGInterpolationNone];
+                             withOrientation:sourceOrientation
+                                      toSize:sourceSize
+                                 withQuality:kCGInterpolationNone];
+
+    NSLog(@"이미지소스 사이즈:%@", NSStringFromCGSize(sourceSize));
+    NSLog(@"이미지뷰 사이즈:%@", NSStringFromCGSize(imageViewSize));
+    NSLog(@"이미지뷰 스케일:%f, %f", transform.a, transform.d);
     
-    CGFloat aspect = cropSize.height/cropSize.width;
+    CGSize scaledImageViewSize = CGSizeMake(imageViewSize.width * transform.a, imageViewSize.height * transform.d);
+    NSLog(@"이미지뷰 실제 사이즈:%@", NSStringFromCGSize(scaledImageViewSize));
+    NSLog(@"크롭뷰 사이즈:%@", NSStringFromCGSize(cropSize));
+
+    CGFloat aspect = sourceSize.height/sourceSize.width;
+    NSLog(@"%@", aspect>=1?@"세로이미지":@"가로이미지");
+
+    // 크롭뷰사이즈보다 이미지뷰가 충분히 크지 않으면, 크롭뷰 사이즈를 이미지 사이즈로 재설정 해준다.
+    if (scaledImageViewSize.width < cropSize.width || scaledImageViewSize.height < cropSize.width) {
+        // 가로사진
+        if (aspect <= 1) {
+            cropSize = CGSizeMake(cropSize.width, scaledImageViewSize.height);
+        }
+        // 세로사진
+        else {
+            cropSize = CGSizeMake(scaledImageViewSize.width, cropSize.height);
+        }
+        NSLog(@"새로운 크롭뷰 사이즈:%@", NSStringFromCGSize(cropSize));
+    }
+
+    aspect = cropSize.height/cropSize.width;
     CGSize outputSize = CGSizeMake(outputWidth, outputWidth*aspect);
-    
+    NSLog(@"최종 outputSize:%@", NSStringFromCGSize(outputSize));
+
+    NSLog(@"output사이지 비트맵context생성");
     CGContextRef context = CGBitmapContextCreate(NULL,
                                                  outputSize.width,
                                                  outputSize.height,
@@ -533,12 +679,14 @@ static const NSTimeInterval kAnimationIntervalTransform = 0.2;
                                                  0,
                                                  CGImageGetColorSpace(source),
                                                  CGImageGetBitmapInfo(source));
-    CGContextSetFillColorWithColor(context,  [[UIColor clearColor] CGColor]);
+    CGContextSetFillColorWithColor(context, [[UIColor clearColor] CGColor]);
+
     CGContextFillRect(context, CGRectMake(0, 0, outputSize.width, outputSize.height));
-    
+
     CGAffineTransform uiCoords = CGAffineTransformMakeScale(outputSize.width/cropSize.width,
                                                             outputSize.height/cropSize.height);
     uiCoords = CGAffineTransformTranslate(uiCoords, cropSize.width/2.0, cropSize.height/2.0);
+    // 좌표게변환, 뒤집어 나오느걸 방지
     uiCoords = CGAffineTransformScale(uiCoords, 1.0, -1.0);
     CGContextConcatCTM(context, uiCoords);
     
